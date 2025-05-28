@@ -1,0 +1,234 @@
+-- Функция проверки целостности путей директорий
+CREATE OR REPLACE FUNCTION f_check_directory_paths()
+RETURNS TABLE (
+    issue_type TEXT,
+    resource_id INTEGER,
+    resource_name VARCHAR,
+    directory_id INTEGER,
+    relative_path VARCHAR,
+    details TEXT
+) AS $$
+BEGIN
+    -- Проверка корректности иерархии директорий
+    RETURN QUERY
+    WITH RECURSIVE directory_tree AS (
+        SELECT
+            d.directory_s,
+            d.information_resource_s,
+            d.parent_directory_s,
+            d.relative_path,
+            d.nesting_level,
+            1 as level
+        FROM directory d
+        WHERE d.parent_directory_s IS NULL
+
+        UNION ALL
+
+        SELECT
+            d.directory_s,
+            d.information_resource_s,
+            d.parent_directory_s,
+            d.relative_path,
+            d.nesting_level,
+            dt.level + 1
+        FROM directory d
+        JOIN directory_tree dt ON d.parent_directory_s = dt.directory_s
+    )
+    SELECT
+        'Invalid Directory Hierarchy' as issue_type,
+        d.information_resource_s,
+        ir.name as resource_name,
+        d.directory_s,
+        d.relative_path,
+        'Directory nesting level mismatch or invalid parent reference' as details
+    FROM directory d
+    LEFT JOIN directory_tree dt ON d.directory_s = dt.directory_s
+    JOIN information_resource ir ON d.information_resource_s = ir.information_resource_s
+    WHERE d.nesting_level != dt.level
+    OR (d.parent_directory_s IS NOT NULL AND dt.directory_s IS NULL);
+
+    -- Проверка уникальности путей в пределах ресурса
+    RETURN QUERY
+    SELECT
+        'Duplicate Directory Path' as issue_type,
+        d.information_resource_s,
+        ir.name as resource_name,
+        d.directory_s,
+        d.relative_path,
+        'Multiple directories with same path in resource' as details
+    FROM directory d
+    JOIN information_resource ir ON d.information_resource_s = ir.information_resource_s
+    GROUP BY d.information_resource_s, ir.name, d.directory_s, d.relative_path
+    HAVING COUNT(*) > 1;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Функция проверки согласованности файлов и директорий
+CREATE OR REPLACE FUNCTION f_check_file_consistency()
+RETURNS TABLE (
+    issue_type TEXT,
+    resource_id INTEGER,
+    resource_name VARCHAR,
+    file_id INTEGER,
+    relative_path VARCHAR,
+    details TEXT
+) AS $$
+BEGIN
+    -- Проверка соответствия directory_s
+    RETURN QUERY
+    SELECT
+        'Orphaned File' as issue_type,
+        f.information_resource_s,
+        ir.name as resource_name,
+        f.file_s,
+        f.relative_path,
+        'File references non-existent directory' as details
+    FROM file f
+    LEFT JOIN directory d ON f.directory_s = d.directory_s
+    JOIN information_resource ir ON f.information_resource_s = ir.information_resource_s
+    WHERE d.directory_s IS NULL;
+
+    -- Проверка соответствия nesting_level
+    RETURN QUERY
+    SELECT
+        'Invalid Nesting Level' as issue_type,
+        f.information_resource_s,
+        ir.name as resource_name,
+        f.file_s,
+        f.relative_path,
+        'File nesting level does not match parent directory' as details
+    FROM file f
+    JOIN directory d ON f.directory_s = d.directory_s
+    JOIN information_resource ir ON f.information_resource_s = ir.information_resource_s
+    WHERE f.nesting_level != d.nesting_level + 1;
+
+    -- Проверка соответствия information_resource_s
+    RETURN QUERY
+    SELECT
+        'Resource Mismatch' as issue_type,
+        f.information_resource_s,
+        ir.name as resource_name,
+        f.file_s,
+        f.relative_path,
+        'File and directory belong to different resources' as details
+    FROM file f
+    JOIN directory d ON f.directory_s = d.directory_s
+    JOIN information_resource ir ON f.information_resource_s = ir.information_resource_s
+    WHERE f.information_resource_s != d.information_resource_s;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Функция для проверки статистики ресурса
+CREATE OR REPLACE FUNCTION f_check_resource_statistics()
+RETURNS TABLE (
+    resource_id INTEGER,
+    resource_name VARCHAR,
+    resource_path VARCHAR,
+    total_directories BIGINT,
+    total_files BIGINT,
+    total_size_bytes BIGINT,
+    percent_compliance NUMERIC
+) AS $$
+BEGIN
+    RETURN QUERY
+    WITH res_stats AS (
+        SELECT
+            ir.information_resource_s,
+            ir.name,
+            ir.path,
+            COUNT(DISTINCT d.directory_s)::bigint as directories_count,
+            COUNT(DISTINCT f.file_s)::bigint as files_count,
+            COALESCE(SUM(f.size_bytes), 0)::bigint as total_size,
+            COUNT(DISTINCT CASE WHEN d.compliance_status = 'compliant' THEN d.directory_s END)::bigint as compliant_dirs,
+            COUNT(DISTINCT CASE WHEN f.compliance_status = 'compliant' THEN f.file_s END)::bigint as compliant_files,
+            COUNT(DISTINCT d.directory_s) + COUNT(DISTINCT f.file_s) as total_objects
+        FROM information_resource ir
+        LEFT JOIN directory d ON ir.information_resource_s = d.information_resource_s AND d.is_actual = true
+        LEFT JOIN file f ON ir.information_resource_s = f.information_resource_s AND f.is_actual = true
+        GROUP BY ir.information_resource_s, ir.name, ir.path
+    )
+    SELECT
+        rs.information_resource_s,
+        rs.name,
+        rs.path,
+        rs.directories_count,
+        rs.files_count,
+        rs.total_size,
+        CASE
+            WHEN rs.total_objects = 0 THEN 0
+            ELSE ROUND((rs.compliant_dirs + rs.compliant_files)::numeric / rs.total_objects * 100, 2)
+        END as percent_compliance
+    FROM res_stats rs
+    ORDER BY rs.information_resource_s;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Функция для проверки актуальности сканирования
+CREATE OR REPLACE FUNCTION f_check_scan_freshness(days_threshold INTEGER)
+RETURNS TABLE (
+    resource_id INTEGER,
+    resource_name VARCHAR,
+    resource_path VARCHAR,
+    scan_schedule VARCHAR,
+    days_without_scan INTEGER,
+    status TEXT
+) AS $$
+BEGIN
+    RETURN QUERY
+    WITH last_activity AS (
+        -- Получаем последнюю активность по файлам и директориям
+        SELECT
+            ir.information_resource_s,
+            ir.name,
+            ir.path,
+            ir.scan_schedule,
+            GREATEST(
+                MAX(f.first_discovered),
+                MAX(d.first_discovered)
+            ) as last_scan_date
+        FROM information_resource ir
+        LEFT JOIN file f ON ir.information_resource_s = f.information_resource_s
+        LEFT JOIN directory d ON ir.information_resource_s = d.information_resource_s
+        GROUP BY
+            ir.information_resource_s,
+            ir.name,
+            ir.path,
+            ir.scan_schedule
+    )
+    SELECT
+        la.information_resource_s,
+        la.name,
+        la.path,
+        la.scan_schedule,
+        CASE
+            WHEN la.last_scan_date IS NULL THEN NULL
+            ELSE EXTRACT(DAY FROM (NOW() - la.last_scan_date))::INTEGER
+        END as days_without_scan,
+        CASE
+            WHEN la.last_scan_date IS NULL THEN 'NEVER SCANNED'
+            WHEN EXTRACT(DAY FROM (NOW() - la.last_scan_date)) > days_threshold THEN 'SCAN NEEDED'
+            ELSE 'UP TO DATE'
+        END as status
+    FROM last_activity la
+    WHERE
+        la.last_scan_date IS NULL
+        OR EXTRACT(DAY FROM (NOW() - la.last_scan_date)) > days_threshold
+    ORDER BY days_without_scan DESC NULLS FIRST;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Примеры использования:
+-- SELECT * FROM check_directory_paths();
+-- SELECT * FROM check_file_consistency();
+-- SELECT * FROM check_resource_statistics();
+-- SELECT * FROM check_scan_freshness(7);
+-- Примеры использования:
+
+-- Проверка целостности путей:
+-- SELECT * FROM check_directory_paths();
+
+-- Проверка статистики:
+-- SELECT * FROM check_resource_statistics();
+
+-- Проверка свежести сканирования (например, для ресурсов не сканировавшихся более 7 дней):
+-- SELECT * FROM check_scan_freshness(7);
