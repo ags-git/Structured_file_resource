@@ -1,0 +1,55 @@
+INSERT INTO reference_structure_level (name) VALUES ('top'), ('toc'), ('detail');
+INSERT INTO reference_structure (information_resource_s,reference_structure_level_s,name,description)
+    VALUES (1,1,'Год-проект', 'YYYY/Наименование проекта');
+INSERT INTO reference_structure (information_resource_s,reference_structure_level_s,name,description)
+    VALUES (1,2,'Оглавление', 'Оглавление');
+INSERT INTO reference_structure (information_resource_s,reference_structure_level_s,name,description)
+    VALUES (1,3,'Пример детализированной', 'Пример детализированной');
+
+INSERT INTO dictionary (code, name, is_actual) VALUES ('Проект', 'Проект', TRUE);
+INSERT INTO dictionary (code, name, is_actual) VALUES ('Бренд', 'Бренд', TRUE);
+INSERT INTO dictionary (code, name, is_actual) VALUES ('Фотоаппарат', 'Фотоаппарат', TRUE);
+
+INSERT INTO nsi_data (dictionary_s, entity_id, entity_name, is_actual)
+    SELECT 1, uuid_generate_v4()::VARCHAR, name, TRUE FROM directory WHERE nesting_level = 2 AND name !~ '[0-9]';
+
+INSERT INTO nsi_data (dictionary_s, entity_id, entity_name, is_actual)
+    VALUES
+        (2, uuid_generate_v4()::VARCHAR, 'Nikon', TRUE),
+        (2, uuid_generate_v4()::VARCHAR, 'Canon', TRUE),
+        (2, uuid_generate_v4()::VARCHAR, 'Olympus', TRUE),
+        (2, uuid_generate_v4()::VARCHAR, 'Sony', TRUE),
+        (2, uuid_generate_v4()::VARCHAR, 'Pentax', TRUE),
+        (2, uuid_generate_v4()::VARCHAR, 'Samsung', TRUE),
+        (2, uuid_generate_v4()::VARCHAR, 'Konica Minolta', TRUE);
+
+INSERT INTO directory_design (reference_structure_s, parent_directory_design_s, rule_type, dictionary_s, literal_value,
+                                pattern_value, is_mandatory, is_unique, nesting_level, is_date, date_sign)
+    VALUES
+        (1, NULL, 'literal', NULL, 'ФОТО', NULL, TRUE, TRUE, 0, FALSE, NULL),
+        (1, 1, 'pattern', NULL, NULL, '^YYYY$', FALSE, FALSE, 1, TRUE, 'Y'),
+        (1, 2, 'dictionary', 1, NULL, NULL, FALSE, FALSE, 2, FALSE, NULL);
+
+INSERT INTO file_design (reference_structure_s, parent_directory_design_s, rule_type, dictionary_s, literal_value, pattern_value,
+            is_mandatory, is_unique, nesting_level)
+    VALUES
+        (1, 1, 'pattern', NULL, NULL, '^.*\.(jpg|jpeg)', FALSE, FALSE, 3),
+        (1, 1, 'pattern', NULL, NULL, '^.*\.(cr2|nef|orf|tif)', FALSE, FALSE, 3),
+        (1, 1, 'pattern', NULL, NULL, '^.*\.dng', FALSE, FALSE, 3),
+        (1, 1, 'pattern', NULL, NULL, '^.*\.dng', FALSE, FALSE, 3),
+        (1, 1, 'pattern', NULL, NULL, '^.*\.pp3', FALSE, FALSE, 3),
+        (1, 1, 'pattern', NULL, NULL, '^.*\.xmp', FALSE, FALSE, 3);
+
+INSERT INTO directory_design (reference_structure_s, parent_directory_design_s, rule_type, dictionary_s, literal_value,
+                                pattern_value, is_mandatory, is_unique, nesting_level, is_date, date_sign)
+    VALUES
+        (2, NULL, 'literal', NULL, 'Другие', NULL, FALSE, TRUE, 0, FALSE, NULL);
+
+INSERT INTO directory_design (reference_structure_s, parent_directory_design_s, rule_type, dictionary_s, literal_value,
+                                pattern_value, is_mandatory, is_unique, nesting_level, is_date, date_sign)
+    VALUES
+        (3, NULL, 'dictionary', 2, NULL, NULL, FALSE, FALSE, 0, FALSE, NULL);
+
+INSERT INTO mount_point (toc_directory_design_s, detail_reference_structure_s) VALUES (6, 3);
+
+

@@ -24,12 +24,12 @@ class FilesystemScanner:
         if self.directories:
             path_to_id = self.db.save_directories_bulk(self.directories)
             # Объединяем полученные ID с нашим словарем
-            print(f"path_to_id={path_to_id}")
+            # print(f"path_to_id={path_to_id}")
             self.path_to_dir_id.update(path_to_id)
             self.directories = []
 
     def _flush_files(self):
-        print(f"self.files={self.files}")
+        # print(f"self.files={self.files}")
         """Сохранение накопленных файлов в БД"""
         if self.files:
             self.db.save_files_bulk(self.files)
@@ -87,7 +87,7 @@ class FilesystemScanner:
         # Получаем относительный путь от корня информационного ресурса
         # rel_path = os.path.relpath(abs_path, resource.path)
         rel_path = os.path.join('.', os.path.relpath(dir_path, resource.path))
-        print (f"rel_path={rel_path}")
+        # print (f"rel_path={rel_path}")
 
         # Определяем имя файла и его относительный путь (без имени)
         # file_name = os.path.basename(abs_path)
@@ -103,11 +103,11 @@ class FilesystemScanner:
 
         # Получаем ID директории, в которой находится файл
         directory_s = self.path_to_dir_id.get(rel_path)
-        print (f"directory_s={directory_s}")
+        # print (f"directory_s={directory_s}")
 
         # Вычисляем уровень вложенности
-        nesting_level = len(rel_path.split(os.sep))
-        print(f"nesting_level={nesting_level}")
+        nesting_level = len(rel_path.split(os.sep)) - 1
+        # print(f"nesting_level={nesting_level}")
 
         file_stat = os.stat(abs_path)
         creation_time = datetime.fromtimestamp(file_stat.st_ctime)
